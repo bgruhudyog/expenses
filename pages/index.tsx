@@ -414,24 +414,78 @@ const Home: NextPage = () => {
     }
   };
 
-  // Fetch exchange rates
+  // Fetch exchange rates with Supabase fallback
   const fetchExchangeRates = async () => {
     try {
+      // Try API first
       const response = await fetch('https://api.exchangerate-api.com/v4/latest/INR');
       const data = await response.json();
-      return {
+      
+      const rates = {
         USD: data.rates.USD,
         EUR: data.rates.EUR,
         INR: 1
       };
+      
+      // Immediately save fresh rates to Supabase for future use
+      try {
+        // Update USD rate
+        await supabase
+          .from('exchange_rates')
+          .upsert({
+            currency_code: 'USD',
+            currency_name: 'US Dollar',
+            rate_to_inr: 1 / rates.USD // Convert to "1 USD = X INR"
+          }, {
+            onConflict: 'currency_code'
+          });
+        
+        // Update EUR rate
+        await supabase
+          .from('exchange_rates')
+          .upsert({
+            currency_code: 'EUR',
+            currency_name: 'Euro',
+            rate_to_inr: 1 / rates.EUR // Convert to "1 EUR = X INR"
+          }, {
+            onConflict: 'currency_code'
+          });
+        
+        console.log('Exchange rates updated in Supabase');
+      } catch (updateError) {
+        console.error('Failed to update rates in Supabase:', updateError);
+        // Continue anyway - we have the rates
+      }
+      
+      return rates;
+      
     } catch (error) {
-      console.error('Error fetching exchange rates:', error);
-      // Fallback rates
-      return {
-        USD: 0.012,
-        EUR: 0.011,
-        INR: 1
-      };
+      console.error('API failed, fetching from Supabase:', error);
+      
+      // Fallback to Supabase
+      try {
+        const { data, error } = await supabase
+          .from('exchange_rates')
+          .select('currency_code, rate_to_inr')
+          .in('currency_code', ['USD', 'EUR']);
+        
+        if (error) throw error;
+        
+        const rates = { INR: 1 };
+        data.forEach(rate => {
+          rates[rate.currency_code] = 1 / rate.rate_to_inr;
+        });
+        
+        return rates;
+      } catch (dbError) {
+        console.error('Supabase fallback failed:', dbError);
+        // Last resort hardcoded fallback
+        return {
+          USD: 0.012,
+          EUR: 0.011,
+          INR: 1
+        };
+      }
     }
   };
 
